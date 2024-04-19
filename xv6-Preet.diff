@@ -1,0 +1,625 @@
+diff --git a/PartB.Design.txt b/PartB.Design.txt
+deleted file mode 100644
+index afe4e54..0000000
+--- a/PartB.Design.txt
++++ /dev/null
+@@ -1,121 +0,0 @@
+-Name : Preet Virkam Jain / Devam Punitbhai Patel
+-Nsid: pvj636 / dns682
+-Student No.: 11270494 / 11316715
+-
+-1. getNumFreePages() : To retrieve the total number of free pages in the system
+-
+-vm.c : Most of the XV6 code for maipulating address spaces and page table 
+-		resides in vm.c
+-In uvmcopy:
+-	                                                                                                                                                                                                  
+-    - diable the write flag                                                                                                                                                                                                                                       
+-    flags &= ~PTE_W;                                                                                                                                                                                                                         
+-    - to avoid remap error so unmap the current va first, have to unmap because 
+-		the va is already mapped to a physical address, so 1st unmap and than map
+-    uvmunmap(old ,i, 1, 0 );                                                                                                                                                                                                                 
+-    - map new flags to the parent                                                                                                                                                                
+-    - mappages(old, i, PGSIZE, (uint64)pa, flags)!=0)                                                                                                                                                                                                                                                                                                                                                                                 
+-    - increase the ref count for this/the address in parent process pa                                                                                                                                                                                              
+-    -  incrementRef((void *)pa); 
+-		- Than map the new process va to the same pa with write bit turned off
+-      mappages(new, i, PGSIZE, (uint64)pa, flags) != 0)
+-
+-
+-trap.c:
+-handleWriteFault:
+-		
+-		- get fault VA from Stval
+-		- walk the pagetable of the process and get the PTE for faultVA
+-		- Once you have the PTE get the physical address
+-		- if the refCOunt of pa > 1 than that means that the pa has more than 1 va
+-		map to it, therefore process that is trying to write would need its own 
+-		copy of the data in pa in a newPA, which than will be mapped to the VA
+-		of the process
+-				- change the flags
+-				- call kalloc to get a newpa
+-				- copy data from faultpa to new newpa
+-				- unmap the va first and map it to new pa
+-				- flush the tlb as the page table has been changed if we dont flush
+-				than the TLB entries will still point to the same old pa
+-		- else refCount == 1, that means the pa is only mapped to one va so
+-			just set the write bit and unmap and map again.
+-
+-usertrap:
+-		- add condition rcause == 15 to check for page fault and call the above 
+-			function.
+-
+-
+-kalloc.c:
+-
+-		- make refCounts struct that has a array refs that hold refcounts for all 
+-		the pages 
+-		- to get total n. of pages PHYSTOP(End of RAM ) - KERNBASE(Start of the ram)
+-																																				/PGSIZE
+-		- struct refCounts{                                                                                                                                                                                                                            
+-  struct spinlock lock;                                                                                                                                                                                                                      
+-  int refs[(PHYSTOP - KERNBASE)/4096];                                                                                                                                                                                                       
+-};   
+-
+-		- The array has to be declared like this becasue we cant malloc, which will
+-		be intialized in kinit because that will be the fisrt func to run
+-		- And for the index the idea is to just take the given pa - KERNBASE/PGSIZE
+-		 this should give us a value that indicates how far the page is from the 
+-		 start which is perfect to use as index because it means the same thing
+-
+-		- freePages: has an uint64 variable that holds the value of free pages
+-		available, which we  can use to test our refernce counter if refCount goes 
+-		up freePages should go down
+-
+-		- each struct has a spinlock inside them because they are intended
+-		to protect stuff inside the struct
+-
+-
+-struct freePages{                                                                                                                                                                                                                            
+-  struct spinlock lock;                                                                                                                                                                                                                      
+-  uint64 freePages;                                                                                                                                                                                                                          
+-};
+-
+-int incrementRef(void *pa)
+-		- to increment the ref counter of given pa
+-int decrementRef(void *pa)
+-		- to decrement the ref counter of given pa
+-int getCount(void *pa)
+-		- To get the count fo given pa
+-
+-freerange:
+-		- was edited to initialize each element of refsarray to 0 as it already
+-		loops through pageslist it is easier to it their
+-
+-kfree:
+-		- Kfree should only decrement pages ref count only  when the refcount 
+-		of pa is > 0
+-		- Kfree will only free the memory and add it to the free list if the 
+-		refcount<=0 so that if there is any other process still using the pa
+-		the pa should still exist.
+-		- each time it is called it will also increases the freepages++
+-
+-kalloc:
+-		- is edited to increment refcount for the given pa and decrease the 
+-		freepages-- when called
+-
+-getNumFreePages(void):
+-		- returns the number of freepages
+-
+-
+-
+-defs.h
+-		- added function stubs to the header file to be used by other files
+-
+-- The idea was that the umvcopy only points the pagetable in new process
+-to the same memory as the parent with the above changes
+-- And the trap handler is taking care of the page fault occuring but 
+-and I believe it is taking care of that error but I just cant get rid of
+-usertrap(): unexpected scause 0x000000000000000c pid=2
+-            sepc=0x0000000000002000 stval=0x0000000000002000
+-usertrap(): unexpected scause 0x000000000000000c pid=1
+-            sepc=0x0000000000001000 stval=0x0000000000001000
+-panic: init exiting
+-
+-these errors, but to test the scheduler I am commenting out the code and puting 
+-in the original so that it can be tested
+-
+diff --git a/xv6/Makefile b/xv6/Makefile
+index 89b1c8b..b08243f 100644
+--- a/xv6/Makefile
++++ b/xv6/Makefile
+@@ -141,9 +141,7 @@ UPROGS=\
+ 	$U/_zombie\
+ 	$U/_pingpong\
+ 	$U/_uthread\
+-	$U/_pc\
+-	$U/_freePagesTest\
+-	$U/_cowtest
++	$U/_pc
+ 
+ # CMPT 332 GROUP 15 Change, Fall 2023
+ $U/uthread_switch.o : $U/uthread_switch.S
+diff --git a/xv6/kernel/defs.h b/xv6/kernel/defs.h
+index 906466e..fb99889 100644
+--- a/xv6/kernel/defs.h
++++ b/xv6/kernel/defs.h
+@@ -8,6 +8,7 @@ struct spinlock;
+ struct sleeplock;
+ struct stat;
+ struct superblock;
++
+ /* bio.c */
+ void            binit(void);
+ struct buf*     bread(uint, uint);
+@@ -184,11 +185,5 @@ void            virtio_disk_init(void);
+ void            virtio_disk_rw(struct buf *, int);
+ void            virtio_disk_intr(void);
+ 
+-/*get free pages*/
+-uint64 getNumFreePages(void);
+-/*Refcounts*/
+-int incrementRef(void *pa);
+-int decrementRef(void *pa);
+-int getCount(void *pa);
+ /* number of elements in fixed-size array */
+ #define NELEM(x) (sizeof(x)/sizeof((x)[0]))
+diff --git a/xv6/kernel/getNumFreePages.c b/xv6/kernel/getNumFreePages.c
+deleted file mode 100644
+index 18fb54e..0000000
+--- a/xv6/kernel/getNumFreePages.c
++++ /dev/null
+@@ -1,11 +0,0 @@
+-/*
+- *Names: Preet Vikram Jain / Devam Punitbhai Patel
+-  NSID : pvj636 / dns682
+-	Student Number: 11270494 / 11316715
+- * */
+-
+-#include "getNumFreePages.h"
+-
+-int getNumFreePages(){
+-	return fp;
+-}
+diff --git a/xv6/kernel/getNumFreePages.h b/xv6/kernel/getNumFreePages.h
+deleted file mode 100644
+index 910c5e8..0000000
+--- a/xv6/kernel/getNumFreePages.h
++++ /dev/null
+@@ -1,15 +0,0 @@
+-/* Names: Preet Vikram Jain / Devam Punitbhai Patel
+- * NSID : pvj636 / dns682
+- * Student Number: 11270494 / 11316715
+- * */
+-
+-/*CMPT 332 GROUP 15 Change, Fall 2023*/
+-struct freePages{
+-	struct spinlock lock;
+-	int freePages;
+-};
+-
+-struct freePages fp;
+-/*CMPT 332 GROUP 15 Change, Fall 2023*/
+-
+-int getNumFreePages();
+diff --git a/xv6/kernel/kalloc.c b/xv6/kernel/kalloc.c
+index d82d111..e9e70b9 100644
+--- a/xv6/kernel/kalloc.c
++++ b/xv6/kernel/kalloc.c
+@@ -8,22 +8,12 @@
+ #include "spinlock.h"
+ #include "riscv.h"
+ #include "defs.h"
++
+ void freerange(void *pa_start, void *pa_end);
+ 
+ extern char end[]; /* first address after kernel. */
+                    /* defined by kernel.ld. */
+ 
+-/* CMPT 332 GROUP XX Change, Fall 2023 */
+-struct refCounts{
+-	struct spinlock lock;
+-	int refs[(PHYSTOP - KERNBASE)/4096];
+-};
+-struct freePages{
+-	struct spinlock lock;
+-	uint64 freePages;
+-};
+-struct refCounts references;
+-struct freePages fp;
+ struct run {
+   struct run *next;
+ };
+@@ -33,53 +23,11 @@ struct {
+   struct run *freelist;
+ } kmem;
+ 
+-int incrementRef(void *pa){
+-/*	printf("%d", *(uint64 *)pa);*/
+-	int index = ((uint64)pa - KERNBASE)/PGSIZE;
+-	acquire(&references.lock);
+-	references.refs[index]++;
+-	release(&references.lock);
+-
+-
+-/*	printf("Index: %d for page : %d\n", index, *(uint64 *)pa);*/
+-	return 1;
+-}
+-int decrementRef(void *pa){
+-/*	printf("%d", *(uint64 *)pa);*/
+-	int index =( (uint64)pa - KERNBASE)/PGSIZE;
+-	acquire(&references.lock);
+-	references.refs[index]--;
+-
+-
+-	release(&references.lock);
+-
+-/*	printf("Index: %d for page : %d\n", index, *(uint64 *)pa);*/
+-	return 1;
+-}
+-int getCount(void *pa){
+-	int value;
+-	int index = ( (uint64)pa - KERNBASE)/PGSIZE;
+-	acquire(&references.lock);
+-	value = references.refs[index];
+-	release(&references.lock);
+-	return value;
+-}
+-
+-/* CMPT 332 GROUP XX Change, Fall 2023 */
+ void
+ kinit()
+ {
+   initlock(&kmem.lock, "kmem");
+-	initlock(&fp.lock, "fp");
+-	initlock(&references.lock, "ref");
+-/*	memset(references.refs, 0, (PHYSTOP - KERNBASE)/4096);*/
+-	acquire(&fp.lock);
+-	fp.freePages = 0;
+-	release(&fp.lock);
+   freerange(end, (void*)PHYSTOP);
+-/*	memset(references.refs, 0, (PHYSTOP - KERNBASE)/4096);*/
+-	printf("Kinit end \n");
+-
+ }
+ 
+ void
+@@ -87,13 +35,10 @@ freerange(void *pa_start, void *pa_end)
+ {
+   char *p;
+   p = (char*)PGROUNDUP((uint64)pa_start);
+-  for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE){
+-/* CMPT 332 GROUP XX Change, Fall 2023 */   
+-		references.refs[((uint64)p - KERNBASE)/PGSIZE] = 0; 
+-		kfree(p);
+-	}
++  for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE)
++    kfree(p);
+ }
+-/* CMPT 332 GROUP XX Change, Fall 2023 */   
++
+ /* Free the page of physical memory pointed at by pa, */
+ /* which normally should have been returned by a */
+ /* call to kalloc().  (The exception is when */
+@@ -101,36 +46,20 @@ freerange(void *pa_start, void *pa_end)
+ void
+ kfree(void *pa)
+ {
+-/*If reference count for pa is == 1 only than free th page otherwise just 
+- * decreasee the counter */
+-/*	if (getCount(pa) == 1){*/
+-		
++  struct run *r;
+ 
+-  	struct run *r;
++  if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
++    panic("kfree");
+ 
+-  	if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
+-    	panic("kfree");
++  /* Fill with junk to catch dangling refs. */
++  memset(pa, 1, PGSIZE);
+ 
+-  	/* Fill with junk to catch dangling refs. */
+-  	memset(pa, 1, PGSIZE);
+-		if(getCount(pa) > 0){
+-			decrementRef(pa);
+-		}
++  r = (struct run*)pa;
+ 
+-  	r = (struct run*)pa;
+-		if(getCount(pa)<=0){
+-		acquire(&fp.lock);
+-		fp.freePages++;
+-		release(&fp.lock);
+-		/*printf("Freed Page: no. of pages:  %d\n" , fp.freePages );*/
+-  	acquire(&kmem.lock);
+-  	r->next = kmem.freelist;
+-  	kmem.freelist = r;
+-  	release(&kmem.lock);
+-	}
+-/*	else{
+-		decrementRef(pa);
+-	}*/
++  acquire(&kmem.lock);
++  r->next = kmem.freelist;
++  kmem.freelist = r;
++  release(&kmem.lock);
+ }
+ 
+ /* Allocate one 4096-byte page of physical memory. */
+@@ -146,20 +75,8 @@ kalloc(void)
+   if(r)
+     kmem.freelist = r->next;
+   release(&kmem.lock);
+-	acquire(&fp.lock);
+-	fp.freePages--;
+-	release(&fp.lock);
+-/*	printf("r %d", *r);*/
+-	incrementRef(r);
+-/*	printf("Allocated a  Page: no. of pages:  %d\n" , fp.freePages );*/
+ 
+   if(r)
+     memset((char*)r, 5, PGSIZE); /* fill with junk */
+   return (void*)r;
+ }
+-
+-uint64 getNumFreePages(void){
+-	return fp.freePages;
+-}
+-
+-/* CMPT 332 GROUP XX Change, Fall 2023 */   
+diff --git a/xv6/kernel/main.c b/xv6/kernel/main.c
+index d9fc44f..078d3ec 100644
+--- a/xv6/kernel/main.c
++++ b/xv6/kernel/main.c
+@@ -40,6 +40,6 @@ main()
+     trapinithart();   /* install kernel trap vector */
+     plicinithart();   /* ask PLIC for device interrupts */
+   }
+-	getNumFreePages();
++
+   scheduler();        
+ }
+diff --git a/xv6/kernel/syscall.c b/xv6/kernel/syscall.c
+index 2445bba..b67d25a 100644
+--- a/xv6/kernel/syscall.c
++++ b/xv6/kernel/syscall.c
+@@ -102,7 +102,6 @@ extern uint64 sys_link(void);
+ extern uint64 sys_mkdir(void);
+ extern uint64 sys_close(void);
+ extern uint64 sys_trace(void);
+-extern uint64 sys_getNumFreePages(void);
+ /* An array mapping syscall numbers from syscall.h */
+ /* to the function that handles the system call. */
+ static uint64 (*syscalls[])(void) = {
+@@ -127,8 +126,7 @@ static uint64 (*syscalls[])(void) = {
+ [SYS_link]    sys_link,
+ [SYS_mkdir]   sys_mkdir,
+ [SYS_close]   sys_close,
+-[SYS_trace]   sys_trace,
+-[SYS_getNumFreePages] sys_getNumFreePages
++[SYS_trace]   sys_trace
+ };
+ static char *syscallNames[]  = {
+ [SYS_fork]    "fork",
+@@ -152,8 +150,7 @@ static char *syscallNames[]  = {
+ [SYS_link]    "link",
+ [SYS_mkdir]   "mkdir",
+ [SYS_close]   "close",
+-[SYS_trace]   "trace",
+-[SYS_getNumFreePages] "getNumFreePages"
++[SYS_trace]   "trace"
+ };
+ 
+ void
+diff --git a/xv6/kernel/syscall.h b/xv6/kernel/syscall.h
+index bab77be..1195113 100644
+--- a/xv6/kernel/syscall.h
++++ b/xv6/kernel/syscall.h
+@@ -21,4 +21,3 @@
+ #define SYS_mkdir  20
+ #define SYS_close  21
+ #define SYS_trace  22
+-#define SYS_getNumFreePages 23
+diff --git a/xv6/kernel/sysproc.c b/xv6/kernel/sysproc.c
+index be14992..434e3ee 100644
+--- a/xv6/kernel/sysproc.c
++++ b/xv6/kernel/sysproc.c
+@@ -100,9 +100,3 @@ sys_trace(void)
+   trace(i);
+   return 0;
+ }
+-
+-uint64
+-sys_getNumFreePages(void)
+-{
+-	return getNumFreePages();
+-}
+diff --git a/xv6/kernel/trap.c b/xv6/kernel/trap.c
+index f10c936..9c7a587 100644
+--- a/xv6/kernel/trap.c
++++ b/xv6/kernel/trap.c
+@@ -29,61 +29,6 @@ trapinithart(void)
+   w_stvec((uint64)kernelvec);
+ }
+ 
+-/*CMPT332 Group 15 2023*/
+-int 
+-handleWriteFault(struct proc *p){
+-/*This handler will only assign new pages if ref count is > 1 otherwise
+- * just change the flags to write*/
+-	
+-	pte_t *pte;
+-	uint64 pa;
+-	char *mem;
+-	uint flags;
+-	uint64 faultVA = PGROUNDDOWN(r_stval());
+-	
+-	if((pte = walk(p->pagetable, faultVA, 0))==0){
+-		panic("handleWriteFault: pte should exist");}
+-
+-	if((*pte & PTE_V) == 0){
+-		panic("handleWriteFault: page not present");}
+-
+-	pa = PTE2PA(*pte);
+-	
+-	if(getCount((void *)pa) > 1 )
+-	{
+-		flags = PTE_FLAGS(*pte);
+-		flags |= PTE_W;
+-		if((mem = kalloc()) == 0){
+-			goto err;}
+-		memmove(mem, (char*)pa, PGSIZE);
+-		uvmunmap(p->pagetable, faultVA, 1, 0);
+-
+-		if (mappages(p->pagetable, faultVA, PGSIZE, (uint64)mem, flags) != 0 ){
+-			kfree(mem);
+-			goto err;}
+-		/*decrease count for the old page and inrease for the new page*/
+-		decrementRef((void *)pa);
+-		return 0;
+-	}
+-	else if(getCount((void *)pa) == 1)
+-	{
+-		flags = PTE_FLAGS(*pte);
+-		flags |= PTE_W;
+-		uvmunmap(p->pagetable, faultVA, 1, 0);
+-		if ( mappages(p->pagetable, faultVA, PGSIZE,(uint64) pa, flags )){
+-			goto err;
+-		}
+-	}
+-	sfence_vma();
+-		/*if there is only 1 reference unmap and map again with new flags*/
+-	err:
+-	/*	uvmunmap(new , 0, i / PGSIZE, 1);*/
+-		return -1;
+-
+-
+-}
+-/*CMPT332 Group 15 2023*/  
+-
+ /* */
+ /* handle an interrupt, exception, or system call from user space. */
+ /* called from trampoline.S */
+@@ -127,13 +72,6 @@ usertrap(void)
+     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+     setkilled(p);
+   }
+-/*CMPT332 Group 15 2023*/  
+-
+-	if(r_scause() == 15) {
+-		printf("Scause 15 caused by pageb fault\n");
+-		handleWriteFault(p);
+-	}
+-/*CMPT332 Group 15 2023*/  
+ 
+   if(killed(p))
+     exit(-1);
+@@ -190,6 +128,7 @@ usertrapret(void)
+   uint64 trampoline_userret = TRAMPOLINE + (userret - trampoline);
+   ((void (*)(uint64))trampoline_userret)(satp);
+ }
++
+ /* interrupts and exceptions from kernel code go here via kernelvec, */
+ /* on whatever the current kernel stack is. */
+ void 
+diff --git a/xv6/kernel/vm.c b/xv6/kernel/vm.c
+index 046255b..1bd4a71 100644
+--- a/xv6/kernel/vm.c
++++ b/xv6/kernel/vm.c
+@@ -315,7 +315,7 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
+   pte_t *pte;
+   uint64 pa, i;
+   uint flags;
+- /* char *mem;*/
++  char *mem;
+ 
+   for(i = 0; i < sz; i += PGSIZE){
+     if((pte = walk(old, i, 0)) == 0)
+@@ -324,23 +324,11 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
+       panic("uvmcopy: page not present");
+     pa = PTE2PA(*pte);
+     flags = PTE_FLAGS(*pte);
+-/* CMPT 332 GROUP XX Change, Fall 2023 */
+-
+-		flags &= ~PTE_W;
+-		/*to avoid remap error so unmap the current va first*/
+-		uvmunmap(old ,i, 1, 0 );
+-		/*map new flags to the parent */
+-		if(mappages(old, i, PGSIZE, (uint64)pa, flags)!=0){
+-			goto err;
+-		}
+-/* CMPT 332 GROUP XX Change, Fall 2023 */
+-		/*increase the ref count for this pa*/
+-		incrementRef((void *)pa);
+-   /* if((mem = kalloc()) == 0)
+-      goto err;*/
+-   /* memmove(mem, (char*)pa, PGSIZE);*/
+-    if(mappages(new, i, PGSIZE, (uint64)pa, flags) != 0){
+-     /* kfree(mem);*/
++    if((mem = kalloc()) == 0)
++      goto err;
++    memmove(mem, (char*)pa, PGSIZE);
++    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
++      kfree(mem);
+       goto err;
+     }
+   }
+diff --git a/xv6/user/freePagesTest.c b/xv6/user/freePagesTest.c
+deleted file mode 100644
+index 2783649..0000000
+--- a/xv6/user/freePagesTest.c
++++ /dev/null
+@@ -1,30 +0,0 @@
+-/*
+- * Names: Preet Jain / Devam Punitbhai Patel
+- * NSID: pvj636 / dns682
+- * Student Numbers: 11270494 / 11316715
+- */
+-
+-#include "kernel/types.h"
+-#include "user/user.h"
+-
+-int main()
+-{
+-	int pid;
+-	printf("number of free pages before fork: %d\n", getNumFreePages());
+-	pid = fork();
+-	if(pid == 0)
+-	{
+-		printf("number of free pages after fork from child: %d\n", 
+-		getNumFreePages());
+-		exit(0);
+-	}
+-	else
+-	{
+-		int s;
+-		wait(&s);
+-		printf("number of free pages after fork from parent: %d\n", 
+-		getNumFreePages());
+-		exit(0);
+-	}
+-	return 0;
+-}
+diff --git a/xv6/user/user.h b/xv6/user/user.h
+index 38dcf85..5539186 100644
+--- a/xv6/user/user.h
++++ b/xv6/user/user.h
+@@ -23,7 +23,6 @@ char* sbrk(int);
+ int sleep(int);
+ int uptime(void);
+ int trace(int mask );
+-int getNumFreePages(void);
+ /* ulib.c */
+ int stat(const char*, struct stat*);
+ char* strcpy(char*, const char*);
+diff --git a/xv6/user/usys.pl b/xv6/user/usys.pl
+index ee06e4e..9c97b05 100755
+--- a/xv6/user/usys.pl
++++ b/xv6/user/usys.pl
+@@ -37,4 +37,3 @@ entry("sbrk");
+ entry("sleep");
+ entry("uptime");
+ entry("trace");
+-entry("getNumFreePages")
